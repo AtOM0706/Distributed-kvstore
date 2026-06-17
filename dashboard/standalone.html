@@ -1,0 +1,365 @@
+<!doctype html>
+<!-- =====================================================================
+  KVStore Cluster Dashboard — STANDALONE EDITION
+  No npm, no Node, no build step. Just open this file in a browser
+  (double-click it in Explorer) while the cluster is running in WSL2.
+  Connects directly to ws://127.0.0.1:8001-8003.
+====================================================================== -->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>KVStore Cluster Dashboard</title>
+<style>
+:root {
+  --bg:#0a0e1a; --card:rgba(255,255,255,.04); --border:rgba(255,255,255,.08);
+  --cyan:#00d4ff; --green:#00ff88; --amber:#ffaa00; --red:#ff4444;
+  --text:#e8ecf4; --dim:#8b93a7;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  background:var(--bg);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 20% -10%, rgba(0,212,255,.08), transparent),
+    radial-gradient(ellipse 60% 40% at 90% 10%, rgba(0,255,136,.05), transparent);
+  color:var(--text); font-family:'Segoe UI',system-ui,sans-serif; min-height:100vh;
+}
+.mono{font-family:Consolas,'JetBrains Mono',monospace}
+.app{max-width:1400px;margin:0 auto;padding:24px}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.header h1{font-size:22px;font-weight:700}
+.header h1 span{color:var(--cyan)}
+.header .sub{color:var(--dim);font-size:13px;margin-top:2px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;
+  padding:18px;backdrop-filter:blur(12px)}
+.card h3{font-size:12px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--dim);margin-bottom:12px}
+.stats-bar{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-bottom:16px}
+.stat-tile{text-align:center;padding:14px 10px}
+.stat-tile .big{font-size:24px;font-weight:700;font-family:Consolas,monospace}
+.stat-tile .small{font-size:11px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.07em;margin-top:4px}
+.grid-nodes{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:16px}
+.grid-mid{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:900px){.grid-nodes,.grid-mid{grid-template-columns:1fr}
+  .stats-bar{grid-template-columns:repeat(2,1fr)}}
+.node-card{transition:border-color .4s,box-shadow .4s,opacity .4s}
+.node-card.leader{border-color:rgba(0,255,136,.35);box-shadow:0 0 32px rgba(0,255,136,.07)}
+.node-card.dead{opacity:.55;border-color:rgba(255,68,68,.3)}
+.node-card .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.node-card .name{font-weight:600;font-size:15px}
+.role-badge{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+  padding:4px 10px;border-radius:999px;transition:all .4s}
+.role-badge.leader{background:rgba(0,255,136,.12);color:var(--green);
+  animation:pulse 2s ease-in-out infinite}
+.role-badge.follower{background:rgba(0,212,255,.1);color:var(--cyan)}
+.role-badge.candidate{background:rgba(255,170,0,.12);color:var(--amber)}
+.role-badge.dead{background:rgba(255,68,68,.12);color:var(--red)}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,255,136,.25)}
+  50%{box-shadow:0 0 0 7px rgba(0,255,136,0)}}
+.node-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px}
+.ns .label{font-size:11px;color:var(--dim)}
+.ns .value{font-size:15px;font-weight:600;font-family:Consolas,monospace}
+.log-viewer{height:240px;overflow-y:auto;font-family:Consolas,monospace;
+  font-size:12px;line-height:1.7}
+.log-viewer::-webkit-scrollbar{width:6px}
+.log-viewer::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:3px}
+.log-line{display:flex;gap:10px;padding:1px 4px;border-radius:4px;animation:fadeIn .4s ease}
+.log-line:hover{background:rgba(255,255,255,.03)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(3px)}to{opacity:1}}
+.log-time{color:var(--dim);flex-shrink:0}
+.log-tag{flex-shrink:0;width:86px;font-weight:600}
+.log-tag.election{color:var(--amber)}
+.log-tag.replication{color:var(--cyan)}
+.log-tag.snapshot{color:var(--green)}
+.ring-tip{font-size:12px;color:var(--dim);text-align:center;margin-top:8px;
+  min-height:18px;font-family:Consolas,monospace}
+.legend{display:flex;gap:14px;justify-content:center;margin-top:6px;
+  font-size:12px;color:var(--dim)}
+.legend .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+#chart{width:100%;height:230px}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <div>
+      <h1><span>◆</span> KVStore Cluster</h1>
+      <div class="sub">Distributed key-value store · Raft consensus · 3 nodes · standalone dashboard</div>
+    </div>
+    <div class="sub mono" id="leader-info">connecting…</div>
+  </div>
+
+  <div class="stats-bar" id="stats-bar"></div>
+  <div class="grid-nodes" id="nodes"></div>
+  <div class="grid-mid">
+    <div class="card">
+      <h3>Throughput — rolling 60s</h3>
+      <canvas id="chart"></canvas>
+    </div>
+    <div class="card">
+      <h3>Consistent hash ring</h3>
+      <svg id="ring" viewBox="0 0 260 260" style="width:100%;max-height:240px;display:block"></svg>
+      <div class="ring-tip" id="ring-tip">&nbsp;</div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3 id="log-title">Raft event log</h3>
+    <div class="log-viewer" id="log"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* ---------------- configuration ---------------- */
+const NODE_IDS = [1, 2, 3];
+const WS_PORT_BASE = 8000;
+const HOST = '127.0.0.1';
+const DEAD_AFTER_MS = 3500;
+const NODE_COLORS = { 1: '#00d4ff', 2: '#00ff88', 3: '#ffaa00' };
+
+/* ---------------- state ---------------- */
+const nodes = {};   // id -> { status, connected, lastSeen }
+let events = [];    // { node, type, msg, receivedAt }
+const seenEvents = new Set();
+const series = [];  // { writes, reads }
+let logPaused = false;
+
+/* ---------------- websocket layer ---------------- */
+function connect(id) {
+  let ws;
+  try {
+    ws = new WebSocket(`ws://${HOST}:${WS_PORT_BASE + id}`);
+  } catch (e) {
+    setTimeout(() => connect(id), 2000);
+    return;
+  }
+  ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type !== 'status') return;
+    nodes[msg.node_id] = { status: msg, connected: true, lastSeen: Date.now() };
+    if (msg.events) {
+      for (const ev of msg.events) {
+        const key = `${msg.node_id}|${ev.type}|${ev.msg}|${ev.at}`;
+        if (seenEvents.has(key)) continue;
+        seenEvents.add(key);
+        events.push({ node: msg.node_id, type: ev.type, msg: ev.msg,
+                      receivedAt: Date.now() });
+      }
+      if (events.length > 200) events = events.slice(-200);
+    }
+  };
+  ws.onclose = () => {
+    if (nodes[id]) nodes[id].connected = false;
+    setTimeout(() => connect(id), 1500);
+  };
+  ws.onerror = () => ws.close();
+}
+NODE_IDS.forEach(connect);
+
+/* Mark stale nodes dead */
+setInterval(() => {
+  for (const id of Object.keys(nodes)) {
+    const n = nodes[id];
+    if (n.connected && Date.now() - n.lastSeen > DEAD_AFTER_MS)
+      n.connected = false;
+  }
+}, 1000);
+
+/* ---------------- helpers ---------------- */
+const fmt = (v) => (v === undefined || v === null) ? '—' : v.toLocaleString();
+const alive = () => Object.values(nodes).filter((n) => n.connected);
+const leaderNode = () =>
+  alive().find((n) => n.status && n.status.role === 'leader');
+
+/* ---------------- render: header + stats ---------------- */
+function renderHeader() {
+  const l = leaderNode();
+  document.getElementById('leader-info').textContent = l
+    ? `leader: node ${l.status.node_id} · term ${l.status.term}`
+    : 'no leader — election in progress';
+}
+
+function renderStats() {
+  const l = leaderNode();
+  const m = l ? l.status.metrics : {};
+  const tiles = [
+    [alive().length, 'Nodes up', 'var(--green)'],
+    [m.total_keys ?? 0, 'Total keys', 'var(--cyan)'],
+    [m.writes_per_sec ?? 0, 'Writes / sec', 'var(--cyan)'],
+    [m.reads_per_sec ?? 0, 'Reads / sec', 'var(--green)'],
+    [m.avg_latency_us ?? 0, 'Avg latency (µs)', 'var(--amber)'],
+  ];
+  document.getElementById('stats-bar').innerHTML = tiles.map(
+    ([v, label, color]) =>
+      `<div class="card stat-tile"><div class="big" style="color:${color}">` +
+      `${Number(v).toLocaleString()}</div><div class="small">${label}</div></div>`
+  ).join('');
+}
+
+/* ---------------- render: node cards ---------------- */
+function renderNodes() {
+  document.getElementById('nodes').innerHTML = NODE_IDS.map((id) => {
+    const n = nodes[id];
+    const ok = n && n.connected;
+    const s = n && n.status;
+    const role = !ok ? 'dead' : (s ? s.role : 'unknown');
+    const m = s ? s.metrics : null;
+    const stat = (label, value) =>
+      `<div class="ns"><div class="label">${label}</div>` +
+      `<div class="value">${value}</div></div>`;
+    return `<div class="card node-card ${role === 'leader' ? 'leader' : ''} ${!ok ? 'dead' : ''}">
+      <div class="top"><div class="name">Node ${id}</div>
+        <div class="role-badge ${role}">${!ok ? 'DOWN' : role}</div></div>
+      <div class="node-stats">
+        ${stat('Term', fmt(s && s.term))}
+        ${stat('Commit index', fmt(s && s.commit_index))}
+        ${stat('Keys', fmt(m && m.total_keys))}
+        ${stat('WAL size', m ? (m.wal_size_bytes / 1024).toFixed(1) + ' KB' : '—')}
+        ${stat('Writes/s', fmt(m && m.writes_per_sec))}
+        ${stat('Uptime', m ? m.uptime_sec + 's' : '—')}
+      </div></div>`;
+  }).join('');
+}
+
+/* ---------------- render: throughput chart (canvas) ---------------- */
+function sampleThroughput() {
+  const l = leaderNode();
+  series.push({
+    writes: l ? l.status.metrics.writes_per_sec : 0,
+    reads: l ? l.status.metrics.reads_per_sec : 0,
+  });
+  if (series.length > 60) series.shift();
+}
+
+function renderChart() {
+  const canvas = document.getElementById('chart');
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height, PAD = 28;
+
+  ctx.clearRect(0, 0, W, H);
+  const max = Math.max(10, ...series.map((p) => Math.max(p.writes, p.reads)));
+
+  /* gridlines */
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.fillStyle = '#8b93a7';
+  ctx.font = '10px Consolas, monospace';
+  for (let g = 0; g <= 3; g++) {
+    const y = PAD + (H - 2 * PAD) * (g / 3);
+    ctx.beginPath(); ctx.moveTo(PAD + 14, y); ctx.lineTo(W - 6, y); ctx.stroke();
+    ctx.fillText(Math.round(max * (1 - g / 3)).toLocaleString(), 2, y + 3);
+  }
+
+  const drawSeries = (key, color) => {
+    if (series.length < 2) return;
+    const x = (i) => PAD + 14 + (W - PAD - 20) * (i / 59);
+    const y = (v) => PAD + (H - 2 * PAD) * (1 - v / max);
+    const start = 60 - series.length;
+    /* gradient fill */
+    const grad = ctx.createLinearGradient(0, PAD, 0, H - PAD);
+    grad.addColorStop(0, color + '59'); grad.addColorStop(1, color + '00');
+    ctx.beginPath();
+    series.forEach((p, i) => {
+      const px = x(start + i), py = y(p[key]);
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    });
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+    ctx.lineTo(x(start + series.length - 1), H - PAD);
+    ctx.lineTo(x(start), H - PAD);
+    ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+  };
+  drawSeries('writes', '#00d4ff');
+  drawSeries('reads', '#00ff88');
+
+  /* legend */
+  ctx.fillStyle = '#00d4ff'; ctx.fillRect(W - 150, 8, 10, 3);
+  ctx.fillStyle = '#8b93a7'; ctx.fillText('writes/s', W - 135, 12);
+  ctx.fillStyle = '#00ff88'; ctx.fillRect(W - 75, 8, 10, 3);
+  ctx.fillStyle = '#8b93a7'; ctx.fillText('reads/s', W - 60, 12);
+}
+
+/* ---------------- render: hash ring (svg) ---------------- */
+function renderRing() {
+  const svg = document.getElementById('ring');
+  const anyAlive = alive().find(
+    (n) => n.status && n.status.hash_ring && n.status.hash_ring.vnodes.length);
+  const ring = anyAlive ? anyAlive.status.hash_ring.vnodes : [];
+  const deadIds = new Set(NODE_IDS.filter((id) => !(nodes[id] && nodes[id].connected)));
+
+  let parts = ['<circle cx="130" cy="130" r="100" fill="none" ' +
+    'stroke="rgba(255,255,255,0.08)" stroke-width="14"/>'];
+  ring.forEach((v, i) => {
+    const a = (v.hash / 4294967296) * Math.PI * 2 - Math.PI / 2;
+    const x = (130 + 100 * Math.cos(a)).toFixed(1);
+    const y = (130 + 100 * Math.sin(a)).toFixed(1);
+    const dead = deadIds.has(v.node_id);
+    const color = dead ? 'rgba(120,120,130,0.45)' : (NODE_COLORS[v.node_id] || '#888');
+    parts.push(`<circle cx="${x}" cy="${y}" r="3" fill="${color}" ` +
+      `data-i="${i}" style="cursor:pointer;transition:fill .5s"/>`);
+  });
+  parts.push(`<text x="130" y="124" text-anchor="middle" fill="#e8ecf4" ` +
+    `font-size="20" font-weight="700" font-family="Consolas,monospace">${ring.length}</text>`);
+  parts.push('<text x="130" y="144" text-anchor="middle" fill="#8b93a7" ' +
+    'font-size="10" letter-spacing="1">VNODES SHOWN</text>');
+  svg.innerHTML = parts.join('');
+
+  svg.onmousemove = (e) => {
+    const t = e.target;
+    const tip = document.getElementById('ring-tip');
+    if (t.dataset && t.dataset.i !== undefined && ring[t.dataset.i]) {
+      const v = ring[t.dataset.i];
+      tip.textContent = `hash ${v.hash.toString(16).padStart(8, '0')} → node ${v.node_id}`;
+    } else tip.innerHTML = '&nbsp;';
+  };
+
+  document.getElementById('legend').innerHTML = NODE_IDS.map((id) => {
+    const color = deadIds.has(id) ? 'rgba(120,120,130,0.45)' : NODE_COLORS[id];
+    return `<span><span class="dot" style="background:${color}"></span>node ${id}</span>`;
+  }).join('');
+}
+
+/* ---------------- render: event log ---------------- */
+const logBox = document.getElementById('log');
+logBox.onmouseenter = () => { logPaused = true;
+  document.getElementById('log-title').innerHTML =
+    'Raft event log <span style="color:var(--amber)">(paused)</span>'; };
+logBox.onmouseleave = () => { logPaused = false;
+  document.getElementById('log-title').textContent = 'Raft event log'; };
+
+let lastLogLen = -1;
+function renderLog() {
+  if (logPaused || events.length === lastLogLen) return;
+  lastLogLen = events.length;
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  logBox.innerHTML = events.length === 0
+    ? '<div style="color:var(--dim)">Waiting for cluster events… ' +
+      '(start the cluster in WSL2: ./scripts/start_cluster.sh)</div>'
+    : events.map((ev) =>
+        `<div class="log-line"><span class="log-time">` +
+        `${new Date(ev.receivedAt).toLocaleTimeString('en-GB', { hour12: false })}</span>` +
+        `<span class="log-tag ${ev.type}">${ev.type}</span>` +
+        `<span>${esc(ev.msg)}</span></div>`).join('');
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+/* ---------------- main loop ---------------- */
+setInterval(() => {
+  renderHeader();
+  renderStats();
+  renderNodes();
+  renderRing();
+  renderLog();
+}, 1000);
+setInterval(() => { sampleThroughput(); renderChart(); }, 1000);
+window.addEventListener('resize', renderChart);
+</script>
+</body>
+</html>
