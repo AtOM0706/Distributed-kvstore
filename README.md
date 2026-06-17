@@ -159,9 +159,3 @@ Status:   0=OK 1=NOT_FOUND 2=NOT_LEADER(leader_id set) 3=ERROR
 - GETs on followers redirect to the leader rather than serving stale reads.
 - The WebSocket server implements only what the dashboard needs (text frames, no fragmentation/compression).
 - `BENCH` measures pipelined SETs; mixed read/write workloads can be scripted via the CLI.
-
----
-
-### Résumé summary
-
-> **Distributed Key-Value Store (C, ~7.5k LOC).** Built a fault-tolerant 3-node key-value store from scratch implementing the **Raft consensus protocol** (leader election, log replication, snapshotting). Designed a **CRC32-checked write-ahead log** with group-commit `fsync` batching that reached **~10,000 writes/sec — a 25× improvement** over a naive baseline, with **sub-second automatic leader failover** and crash recovery from torn logs. Added consistent hashing (150 vnodes/node), an `epoll`-based non-blocking network layer, a hand-written RFC 6455 WebSocket server, and a **live React dashboard** for real-time cluster observability.
